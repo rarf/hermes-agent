@@ -26,10 +26,14 @@ piecemeal, the footer is sent as a separate trailing message via
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 _DEFAULT_FIELDS: tuple[str, ...] = ("model", "context_pct", "cwd")
 _SEP = " · "
+# Cache file freshness guard: if the quota cache is older than this, the
+# footer drops the provider_quota field rather than showing stale numbers.
+_QUOTA_CACHE_MAX_AGE_S = 60 * 30  # 30 minutes
 
 
 def _home_relative_cwd(cwd: str) -> str:
@@ -95,13 +99,19 @@ def format_runtime_footer(
     context_length: Optional[int],
     cwd: Optional[str] = None,
     fields: Iterable[str] = _DEFAULT_FIELDS,
+    quota_cache: Optional[dict[str, Any]] = None,
 ) -> str:
-    """Render the footer line, or return "" if no fields have data.
+    """Render the footer, or return "" if no fields have data.
 
-    Fields are skipped silently when their underlying data is missing — a
-    partially-populated footer is better than a line with ``?%`` or empty slots.
+    Single-line fields (``model``, ``context_pct``, ``cwd``) are joined with
+    `` · ``.  The ``provider_quota`` field renders as a multi-line block
+    (one provider per line, each window with remaining % + reset) appended
+    below the single-line summary.  Fields are skipped silently when their
+    underlying data is missing — a partially-populated footer is better than a
+    line with ``?%`` or empty slots.
     """
     parts: list[str] = []
+    blocks: list[str] = []
     for field in fields:
         if field == "model":
             m = _model_short(model)
@@ -115,11 +125,91 @@ def format_runtime_footer(
             rel = _home_relative_cwd(cwd or os.environ.get("TERMINAL_CWD", ""))
             if rel:
                 parts.append(rel)
+        elif field == "provider_quota":
+            qblock = _format_provider_quota(quota_cache)
+            if qblock:
+                blocks.append(qblock)
         # Unknown field names are silently ignored.
 
-    if not parts:
+    lines: list[str] = []
+    if parts:
+        lines.append(_SEP.join(parts))
+    lines.extend(blocks)
+    if not lines:
         return ""
-    return _SEP.join(parts)
+    return "\n".join(lines)
+
+
+def _short_reset(reset_iso: Optional[str]) -> str:
+    """Render an ISO reset timestamp as a short local 'reset <when>' string."""
+    if not reset_iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(reset_iso)
+    except (ValueError, TypeError):
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone()
+    now = datetime.now()
+    delta = (local.date() - now.date()).days
+    if delta == 0:
+        day = "today"
+    elif delta == 1:
+        day = "tomorrow"
+    else:
+        day = local.strftime("%b %d")
+    return f"reset {day} {local.strftime('%H:%M')}"
+
+
+def _format_provider_quota(quota_cache: Optional[dict[str, Any]]) -> str:
+    """Render the per-provider quota block, or '' when no data.
+
+    One provider per line.  Each provider shows every window (session / weekly /
+    monthly) it reports, with remaining % and reset time.  Providers with no
+    usable data show an ``unavailable`` note so the footer stays honest (no
+    fake zeros).  Reads the precomputed quota cache (populated out-of-band by
+    ``agent.quota_cache.refresh_quota_cache`` on a schedule) — the footer never
+    does network I/O itself.
+    """
+    if not quota_cache:
+        return ""
+    providers = quota_cache.get("providers") or {}
+    if not providers:
+        return ""
+    segs: list[str] = ["📊 quota:"]
+    for name, rec in providers.items():
+        if not isinstance(rec, dict):
+            continue
+        label = rec.get("label") or name
+        reason = rec.get("unavailable_reason")
+        windows = rec.get("windows") or []
+        if not windows:
+            # A provider with no windows and only a generic "no data" note adds
+            # noise to an every-message footer — skip it silently.  An explicit
+            # *unavailable* reason (e.g. auth failure, xAI oauth gap) is worth
+            # surfacing so the user knows why it's missing.
+            if reason in (None, "no data"):
+                continue
+            segs.append(f"• {label}: unavailable ({reason})")
+            continue
+        win_strs: list[str] = []
+        for w in windows:
+            wlabel = w.get("label") or "window"
+            used = w.get("used_percent")
+            if used is None:
+                rem = "?"
+            else:
+                try:
+                    rem = str(max(0, min(100, round(100 - float(used)))))
+                except (TypeError, ValueError):
+                    rem = "?"
+            tail = _short_reset(w.get("reset_at"))
+            win_strs.append(
+                f"{wlabel} {rem}%" + (f" ({tail})" if tail else "")
+            )
+        segs.append(f"• {label}: " + " · ".join(win_strs))
+    return "\n".join(segs)
 
 
 def build_footer_line(
@@ -140,10 +230,26 @@ def build_footer_line(
     cfg = resolve_footer_config(user_config, platform_key)
     if not cfg.get("enabled"):
         return ""
+
+    # The provider_quota field reads a precomputed on-disk cache (never does
+    # network I/O here).  Load it only when the field is actually requested so
+    # we don't pay a file read for the common model/context/cwd-only footer.
+    fields = cfg.get("fields") or _DEFAULT_FIELDS
+    quota_cache: dict[str, Any] | None = None
+    if "provider_quota" in fields:
+        try:
+            from agent.quota_cache import read_quota_cache, quota_cache_age_seconds
+
+            if (quota_cache_age_seconds() or 10**9) <= _QUOTA_CACHE_MAX_AGE_S:
+                quota_cache = read_quota_cache()
+        except Exception:
+            logger.debug("runtime_footer ▸ quota cache read failed", exc_info=True)
+
     return format_runtime_footer(
         model=model,
         context_tokens=context_tokens,
         context_length=context_length,
         cwd=cwd,
-        fields=cfg.get("fields") or _DEFAULT_FIELDS,
+        fields=fields,
+        quota_cache=quota_cache,
     )
