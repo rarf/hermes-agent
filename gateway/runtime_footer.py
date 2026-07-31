@@ -182,30 +182,26 @@ def _format_provider_quota(quota_cache: Optional[dict[str, Any]]) -> str:
         if not isinstance(rec, dict):
             continue
         label = rec.get("label") or name
-        reason = rec.get("unavailable_reason")
         windows = rec.get("windows") or []
-        if not windows:
-            # A provider with no windows and only a generic "no data" note adds
-            # noise to an every-message footer — skip it silently.  An explicit
-            # *unavailable* reason (e.g. auth failure, xAI oauth gap) is worth
-            # surfacing so the user knows why it's missing.
-            if reason in (None, "no data"):
-                continue
-            segs.append(f"• {label}: unavailable ({reason})")
+        # Only show providers that actually report a window WITH a reset date.
+        # Everything else (no data, auth-failed, consumer-tier-deprecated, or a
+        # window without a reset timestamp) is omitted — the footer stays
+        # focused on what has a real, datable quota.
+        dated = [w for w in windows if w.get("reset_at")]
+        if not dated:
             continue
         win_strs: list[str] = []
         for w in windows:
             wlabel = w.get("label") or "window"
             used = w.get("used_percent")
+            tail = _short_reset(w.get("reset_at"))
             if used is None:
-                tail = _short_reset(w.get("reset_at"))
                 win_strs.append(f"{wlabel}" + (f" (reset {tail})" if tail else ""))
                 continue
             try:
                 rem = str(max(0, min(100, round(100 - float(used)))))
             except (TypeError, ValueError):
                 rem = "?"
-            tail = _short_reset(w.get("reset_at"))
             win_strs.append(
                 f"{wlabel} {rem}%" + (f" (reset {tail})" if tail else "")
             )
