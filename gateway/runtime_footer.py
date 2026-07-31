@@ -159,7 +159,7 @@ def _short_reset(reset_iso: Optional[str]) -> str:
         day = "tomorrow"
     else:
         day = local.strftime("%b %d")
-    return f"reset {day} {local.strftime('%H:%M')}"
+    return f"{day} {local.strftime('%H:%M')}"
 
 
 def _format_provider_quota(quota_cache: Optional[dict[str, Any]]) -> str:
@@ -198,15 +198,16 @@ def _format_provider_quota(quota_cache: Optional[dict[str, Any]]) -> str:
             wlabel = w.get("label") or "window"
             used = w.get("used_percent")
             if used is None:
+                tail = _short_reset(w.get("reset_at"))
+                win_strs.append(f"{wlabel}" + (f" (reset {tail})" if tail else ""))
+                continue
+            try:
+                rem = str(max(0, min(100, round(100 - float(used)))))
+            except (TypeError, ValueError):
                 rem = "?"
-            else:
-                try:
-                    rem = str(max(0, min(100, round(100 - float(used)))))
-                except (TypeError, ValueError):
-                    rem = "?"
             tail = _short_reset(w.get("reset_at"))
             win_strs.append(
-                f"{wlabel} {rem}%" + (f" ({tail})" if tail else "")
+                f"{wlabel} {rem}%" + (f" (reset {tail})" if tail else "")
             )
         segs.append(f"• {label}: " + " · ".join(win_strs))
     return "\n".join(segs)
