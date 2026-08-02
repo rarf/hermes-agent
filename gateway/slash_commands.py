@@ -5246,6 +5246,18 @@ class GatewaySlashCommandsMixin:
                 lines.append("")
                 lines.extend(credits_lines)
 
+            # Plugin-contributed /usage extras (e.g. per-provider quota block).
+            try:
+                from hermes_cli.plugins import invoke_hook
+
+                for extra in invoke_hook("usage_extra"):
+                    extra_lines = [ln for ln in (extra or "").split("\n") if ln.strip()]
+                    if extra_lines:
+                        lines.append("")
+                        lines.extend(extra_lines)
+            except Exception:
+                pass
+
             return "\n".join(lines)
 
         # No agent at all -- check session history for a rough count
@@ -5267,6 +5279,19 @@ class GatewaySlashCommandsMixin:
             if credits_lines:
                 lines.append("")
                 lines.extend(credits_lines)
+
+            # Plugin-contributed /usage extras (e.g. per-provider quota block).
+            try:
+                from hermes_cli.plugins import invoke_hook
+
+                for extra in invoke_hook("usage_extra"):
+                    extra_lines = [ln for ln in (extra or "").split("\n") if ln.strip()]
+                    if extra_lines:
+                        lines.append("")
+                        lines.extend(extra_lines)
+            except Exception:
+                pass
+
             return "\n".join(lines)
         if account_lines or credits_lines:
             # account-only, credits-only, or both — joined with a blank divider.
@@ -5275,6 +5300,20 @@ class GatewaySlashCommandsMixin:
                 if parts:
                     parts.append("")
                 parts.extend(credits_lines)
+
+            # Plugin-contributed /usage extras (e.g. per-provider quota block).
+            try:
+                from hermes_cli.plugins import invoke_hook
+
+                for extra in invoke_hook("usage_extra"):
+                    extra_lines = [ln for ln in (extra or "").split("\n") if ln.strip()]
+                    if extra_lines:
+                        if parts:
+                            parts.append("")
+                        parts.extend(extra_lines)
+            except Exception:
+                pass
+
             return "\n".join(parts)
         return t("gateway.usage.no_data")
 

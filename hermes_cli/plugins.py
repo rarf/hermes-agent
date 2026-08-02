@@ -379,6 +379,12 @@ VALID_HOOKS: Set[str] = {
     #   alias_used: the exact token the user typed (str), args_raw: str,
     #   session_key: str | None (gateway), platform: str | None (gateway).
     "pre_command",
+    # /usage extension hook. Fired by gateway/slash_commands._handle_usage_command after
+    # the built-in account/credits/session sections are assembled. Plugins return a string
+    # (extra section text) appended before the final result. First-party consumer: the quota
+    # plugin, which appends the per-provider quota block. Return values are split on newlines
+    # and stripped; empty/None returns are ignored.
+    "usage_extra",
 }
 
 # Hooks whose return value carries a directive that the shell-hook response
