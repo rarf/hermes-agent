@@ -379,6 +379,12 @@ VALID_HOOKS: Set[str] = {
     #   alias_used: the exact token the user typed (str), args_raw: str,
     #   session_key: str | None (gateway), platform: str | None (gateway).
     "pre_command",
+    # Runtime-metadata footer extension hook. Fired by gateway/runtime_footer.build_footer_line
+    # when assembling the per-turn footer. Plugins return a string (an extra footer
+    # line or block) which is appended after the built-in fields. First-party consumer:
+    # the quota plugin, which contributes the per-provider quota block. Return values are
+    # stripped; empty/None returns are ignored.
+    "footer",
 }
 
 # Hooks whose return value carries a directive that the shell-hook response

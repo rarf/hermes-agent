@@ -34,8 +34,11 @@ piecemeal, the footer is sent as a separate trailing message via
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Iterable, Optional
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_FIELDS: tuple[str, ...] = ("model", "context_pct", "cwd")
 _SEP = " · "
@@ -167,15 +170,45 @@ def build_footer_line(
     ``turn_seconds`` is the wall-clock duration of the agent run, measured by
     the caller with ``time.monotonic()``.  Callers that don't measure it leave
     it ``None`` and the ``latency`` field is skipped.
+
+    Plugins may contribute extra footer content via the ``footer`` lifecycle
+    hook (see hermes_cli.plugins.VALID_HOOKS).  Each registered callback is
+    invoked with the current footer context (``model``, ``context_tokens``,
+    ``context_length``, ``platform``) and may return a string appended after
+    the built-in fields.  This is how the per-provider quota block (and any
+    other plugin-supplied metadata) reaches the footer — without special-casing
+    in core.
     """
     cfg = resolve_footer_config(user_config, platform_key)
     if not cfg.get("enabled"):
         return ""
-    return format_runtime_footer(
+
+    fields = cfg.get("fields") or _DEFAULT_FIELDS
+
+    body = format_runtime_footer(
         model=model,
         context_tokens=context_tokens,
         context_length=context_length,
         cwd=cwd,
         turn_seconds=turn_seconds,
-        fields=cfg.get("fields") or _DEFAULT_FIELDS,
+        fields=fields,
     )
+
+    # Plugin-contributed footer segments (e.g. quota block).
+    try:
+        from hermes_cli.plugins import invoke_hook
+
+        for seg in invoke_hook(
+            "footer",
+            model=model,
+            context_tokens=context_tokens,
+            context_length=context_length,
+            platform=platform_key,
+        ):
+            seg = (seg or "").strip()
+            if seg:
+                body = f"{body}\n{seg}" if body else seg
+    except Exception:
+        logger.debug("runtime_footer ▸ footer hook failed", exc_info=True)
+
+    return body
